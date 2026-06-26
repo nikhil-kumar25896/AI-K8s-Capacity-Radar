@@ -372,8 +372,7 @@ AI-k8s-Capacity-Radar/
 ├── docs/
 │   ├── architecture.md
 │   ├── scan-flow.md
-│   ├── karpenter-analysis.md
-│   └── medium-article-outline.md
+│   └── karpenter-analysis.md
 ├── prompts/
 │   ├── 01-project-setup-prompt.md
 │   ├── 02-kubectl-scanner-prompt.md

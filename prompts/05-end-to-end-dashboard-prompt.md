@@ -57,6 +57,3 @@ Documentation:
 - Architecture
 - Scan flow
 - Karpenter analysis
-- Demo guide
-- Medium article outline
-
