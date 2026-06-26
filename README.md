@@ -18,6 +18,18 @@ This project is read-only by default. It must not apply fixes automatically.
 
 ---
 
+## Screenshots
+
+### Capacity Command Deck
+
+![AI capacity command deck](screenshots/capacity-command-deck.png)
+
+### AI Recommendation Synthesis
+
+![AI recommendation synthesis](screenshots/ai-recommendations-synthesizing.png)
+
+---
+
 # High Level Architecture
 
 ```text
@@ -354,11 +366,13 @@ AI-k8s-Capacity-Radar/
 ├── README.md
 ├── LICENSE
 ├── .gitignore
+├── screenshots/
+│   ├── capacity-command-deck.png
+│   └── ai-recommendations-synthesizing.png
 ├── docs/
 │   ├── architecture.md
 │   ├── scan-flow.md
 │   ├── karpenter-analysis.md
-│   ├── demo-guide.md
 │   └── medium-article-outline.md
 ├── prompts/
 │   ├── 01-project-setup-prompt.md
