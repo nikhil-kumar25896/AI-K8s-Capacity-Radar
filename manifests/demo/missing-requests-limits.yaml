@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: radar-demo-missing-requests
+  namespace: default
+  labels:
+    app: radar-demo-missing-requests
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: radar-demo-missing-requests
+  template:
+    metadata:
+      labels:
+        app: radar-demo-missing-requests
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+
