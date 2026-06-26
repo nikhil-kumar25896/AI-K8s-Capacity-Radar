@@ -1,4 +1,4 @@
-# 01 - Project Setup Prompt
+## 01 - Project Setup Prompt
 
 Create a monorepo named `kubernetes-capacity-radar`.
 
