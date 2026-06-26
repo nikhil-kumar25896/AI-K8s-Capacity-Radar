@@ -472,6 +472,3 @@ Each finding includes:
 }
 ```
 
-## About
-
-Kubernetes Capacity Intelligence Radar helps platform and DevOps engineers find cost waste, reliability risk, and Karpenter sizing opportunities before capacity problems become incidents.
