@@ -1,125 +1,139 @@
-# Architecture
+# Radar Architecture
 
-## Purpose
+Kubernetes Capacity Intelligence Radar is built as a read-only capacity review loop. It does not try to become a cluster operator. It observes cluster state, turns that state into capacity signals, and presents evidence-backed recommendations for a platform engineer to review.
 
-AI Kubernetes Capacity Intelligence Radar is a read-only Kubernetes capacity intelligence system. It scans local kubeconfig contexts, detects resource waste and capacity risk, analyzes Karpenter sizing posture, and optionally uses Codex CLI to explain findings.
+The design has three hard boundaries:
 
-## Design Goals
+- `kubectl` is the only Kubernetes collection mechanism.
+- deterministic analyzers produce the source-of-truth findings.
+- AI can explain findings, but it cannot create facts or mutate the cluster.
 
-- Prefer safe read-only discovery
-- Use `kubectl`, not the Kubernetes Python SDK
-- Work without AI
-- Avoid secrets in responses and AI prompts
-- Keep recommendations explainable
-- Generate YAML patch previews only
-- Make large-cluster behavior resilient with timeouts and truncation
+## Signal Pipeline
 
-## System Components
+```mermaid
+flowchart LR
+    A["Kubeconfig Context"] --> B["Kubectl Executor"]
+    B --> C["Raw Kubernetes JSON"]
+    C --> D["Workload Signals"]
+    C --> E["Node Signals"]
+    C --> F["Karpenter Signals"]
+    B --> G["Metrics Signals"]
 
-```text
-Next.js Dashboard
-    │
-    ▼
-FastAPI Backend
-    │
-    ▼
-Kubectl Executor
-    │
-    ├── Context Scanner
-    ├── Workload Scanner
-    ├── Metrics Scanner
-    ├── Node Efficiency Scanner
-    └── Karpenter Scanner
-            │
-            ▼
-Analyzers + Recommendation Engine
-            │
-            ▼
-Optional Codex CLI Explanation Layer
+    D --> H["Finding Builder"]
+    E --> H
+    F --> H
+    G --> H
+
+    H --> I["Recommendation Engine"]
+    I --> J["Dashboard State"]
+    I --> K["Patch Preview Queue"]
+    I --> L["Optional AI Explanation"]
+    L --> J
 ```
 
-## Backend Responsibilities
+## Runtime Shape
 
-The backend orchestrates scan steps and converts Kubernetes API data into structured capacity intelligence.
+| Area | Role |
+| --- | --- |
+| Next.js command deck | Lets an engineer choose a context, run scans, compare signals, and copy advisory commands or YAML. |
+| FastAPI control plane | Owns scan orchestration, response contracts, warnings, and AI explanation requests. |
+| Kubectl executor | Runs read-only subprocess commands with kubeconfig, context, timeout, stderr capture, and secret-aware sanitization. |
+| Static analyzers | Detect missing requests, missing limits, pending pods, crash loops, OOMs, restart pressure, and risky namespaces. |
+| Metrics analyzers | Use metrics-server output when available to compare requests, limits, and live usage. |
+| Node analyzer | Measures requested capacity, live utilization, pod density, pressure signals, and empty or low-use nodes. |
+| Karpenter analyzer | Reviews NodePools, NodeClaims, requirements, limits, capacity types, disruption settings, and pending pod fit. |
+| Recommendation engine | Converts findings into practical next actions and YAML patch previews. |
+| AI explainer | Produces an evidence-cited executive summary only when `AI_PROVIDER=codex_cli`. |
 
-Core backend modules:
+## Collection Contract
 
-- API routes for health, contexts, scans, and AI explanations
-- Config and environment loading
-- Structured logging
-- CORS
-- Kubectl subprocess executor
-- Workload resource scanner
-- Node efficiency scanner
-- Karpenter scanner
-- Recommendation engine
-- Optional AI explanation service
+The backend treats every `kubectl` call as an unreliable external dependency. Each command returns a structured result instead of throwing raw process output into the UI.
 
-## Frontend Responsibilities
-
-The frontend is the command deck for platform engineers.
-
-Key UI areas:
-
-- Cluster context selector
-- Namespace selector
-- Fast scan and deep scan controls
-- Capacity radar overview
-- Workload waste findings
-- Node efficiency findings
-- Karpenter NodePools and NodeClaims
-- AI recommendations
-- YAML patch previews
-- Recent scan history
-
-## Data Flow
-
-```text
-User selects context
-    │
-    ▼
-Frontend calls /scan/context
-    │
-    ▼
-Backend validates reachability
-    │
-    ▼
-Frontend runs workload/node/Karpenter scans
-    │
-    ▼
-Backend executes kubectl read-only commands
-    │
-    ▼
-Analyzers produce findings and recommendations
-    │
-    ▼
-Optional AI layer summarizes evidence
-    │
-    ▼
-Dashboard renders prioritized guidance
+```json
+{
+  "status": "success",
+  "stdout": "{}",
+  "stderr": "",
+  "return_code": 0,
+  "error": null,
+  "timed_out": false
+}
 ```
 
-## Failure Handling
+That contract lets scans degrade cleanly. For example, if `kubectl top nodes` fails because metrics-server is unavailable, the node scan still returns static capacity analysis with a warning.
 
-The system should handle:
+## Scan Domains
 
-- `kubectl` missing
-- kubeconfig missing
-- cluster unreachable
-- metrics-server unavailable
-- Karpenter not installed
+### Context
+
+Context discovery answers whether a kubeconfig context is available and reachable. It collects the context name, cluster name, user name, current-context marker, and server version when reachable.
+
+### Workloads
+
+Workload scanning reads pods, deployments, statefulsets, daemonsets, and namespaces as JSON. It identifies resource hygiene issues and pod health signals before live metrics are considered.
+
+### Usage
+
+Usage scanning is optional because metrics-server is optional in Kubernetes clusters. When available, live pod and node metrics are used to estimate over-requesting, under-requesting, idle workloads, and memory risk.
+
+### Nodes
+
+Node scanning joins node allocatable resources with scheduled pod requests and limits. This produces requested CPU and memory percentages, live usage percentages, pod density, and low-utilization signals.
+
+### Karpenter
+
+Karpenter discovery checks for NodePool, NodeClaim, and EC2NodeClass resources. If Karpenter is absent, the scan returns `enabled: false` and the rest of the dashboard continues.
+
+When present, the analyzer looks for sizing and flexibility issues rather than generic cluster errors.
+
+## Failure Behavior
+
+The system should return a useful dashboard state for partial scans. Expected failure cases include:
+
+- `kubectl` is not installed
+- kubeconfig path is missing or invalid
+- selected context is unreachable
 - command timeout
 - RBAC permission denied
-- empty namespaces
-- large clusters
-- no unhealthy workloads
+- metrics-server unavailable
+- Karpenter CRDs not installed
+- namespace has no workloads
+- large clusters return too much data for an AI prompt
 
-## Security Posture
+Failures become warnings or scoped scan errors whenever possible. A failed optional signal should not erase successful findings from other signals.
 
-- No automatic remediation
-- No `kubectl apply`
-- No secret exposure
-- No raw secrets in AI prompts
-- AI receives summarized findings only
-- YAML patch previews require human review
+## AI Boundary
 
+AI receives a summarized scan payload, not raw cluster dumps. The prompt asks it to behave like a senior Kubernetes platform engineer and return strict JSON:
+
+- executive summary
+- top risks
+- savings opportunities
+- Karpenter recommendations
+- workload right-sizing recommendations
+- YAML patch previews
+- confidence
+- assumptions
+
+The AI output is advisory. It must cite scan evidence, preserve uncertainty, and avoid inventing cluster state.
+
+## Safety Model
+
+The app can recommend:
+
+- request and limit changes
+- safer workload baselines
+- NodePool flexibility improvements
+- consolidation tuning
+- capacity limit adjustments
+- selector, affinity, and toleration alignment
+
+The app must not:
+
+- run `kubectl apply`
+- patch or delete cluster resources
+- remediate automatically
+- send raw secrets to AI
+- hide partial scan failures
+
+This keeps the project useful for real clusters without crossing into unattended automation.

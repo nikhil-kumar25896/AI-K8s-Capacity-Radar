@@ -1,22 +1,25 @@
-# AI Kubernetes Capacity Intelligence Radar - High Level Design (HLD)
+# Kubernetes Capacity Intelligence Radar
 
-## Goal
+An AI-native, read-only Kubernetes capacity radar for finding resource waste, reliability risk, and Karpenter sizing issues from local kubeconfig contexts.
 
-Build an AI-assisted Kubernetes capacity intelligence platform that can:
+The project uses `kubectl` as the collection layer, deterministic analyzers as the source of truth, and an optional Codex CLI layer to explain findings in plain platform-engineering language.
 
-- Scan local kubeconfig contexts using `kubectl`
-- Detect Kubernetes resource waste and capacity risk
-- Identify workloads missing CPU or memory requests and limits
-- Highlight OOMKilled, restart-heavy, pending, and crashlooping pods
-- Analyze node efficiency from allocatable, requested, limit, and live usage data
-- Discover Karpenter NodePools, NodeClaims, EC2NodeClasses, and warning signals
-- Recommend workload right-sizing and Karpenter sizing improvements
-- Generate optional YAML patch previews without mutating the cluster
-- Explain findings with an optional local Codex CLI AI layer
+The important boundary: **the app recommends, but it does not mutate the cluster.**
 
-This project is read-only by default. It must not apply fixes automatically.
+## What It Does
 
----
+Kubernetes Capacity Intelligence Radar is designed for platform and DevOps engineers who want a quick answer to:
+
+- Where are workloads missing CPU or memory requests?
+- Which workloads are missing limits?
+- Which pods show OOMKilled, restart-heavy, pending, or crashlooping behavior?
+- Which namespaces carry the highest waste or reliability risk?
+- Which nodes are empty, underused, overpacked, or close to memory pressure?
+- Are Karpenter NodePools flexible enough for real scheduling demand?
+- Are NodeClaims healthy, drifted, old, expired, or not ready?
+- What right-sizing actions should be reviewed first?
+
+It turns scattered `kubectl` commands into a single capacity review workflow.
 
 ## Screenshots
 
@@ -28,436 +31,200 @@ This project is read-only by default. It must not apply fixes automatically.
 
 ![AI recommendation synthesis](screenshots/ai-recommendations-synthesizing.png)
 
----
+## Product Principles
 
-# High Level Architecture
+| Principle | Meaning |
+| --- | --- |
+| `kubectl` native | The backend shells out to `kubectl`; it does not use the Kubernetes Python SDK. |
+| Read-only first | Scans inspect cluster state and never run `kubectl apply`. |
+| Evidence before AI | Findings come from deterministic analyzers before AI sees anything. |
+| AI is optional | The dashboard still works when `AI_PROVIDER` is empty. |
+| Human-reviewed changes | YAML is generated only as a patch preview for review. |
+| Secret-aware output | Command output is sanitized before being returned or summarized. |
 
-```text
-┌────────────────────────────────────────────────────────────┐
-│                    Kubernetes Clusters                     │
-│                                                            │
-│  Pods | Workloads | Nodes | Namespaces | Karpenter CRDs    │
-│                                                            │
-│  Capacity risk, waste, and scheduling evidence exists here │
-└────────────────────────────────────────────────────────────┘
-                              │
-                              │ kubectl only
-                              ▼
-┌────────────────────────────────────────────────────────────┐
-│                    kubectl Scanner Layer                   │
-│                                                            │
-│ Responsibility:                                            │
-│ - Read kubeconfig contexts                                 │
-│ - Run read-only kubectl commands                           │
-│ - Collect JSON output                                      │
-│ - Handle timeouts, unreachable clusters, RBAC errors       │
-│ - Sanitize command output                                  │
-│                                                            │
-│ Components:                                                │
-│                                                            │
-│  1. Context Scanner                                        │
-│     - List kubeconfig contexts                             │
-│     - Detect current context                               │
-│     - Check cluster reachability                           │
-│     - Read Kubernetes server version                       │
-│                                                            │
-│  2. Workload Scanner                                       │
-│     - Read pods, deployments, statefulsets, daemonsets     │
-│     - Read namespaces                                      │
-│     - Detect missing requests and limits                   │
-│     - Detect OOMKilled, restarts, pending, crashlooping    │
-│                                                            │
-│  3. Metrics Scanner                                        │
-│     - Use kubectl top pods                                 │
-│     - Use kubectl top nodes                                │
-│     - Continue gracefully if metrics-server is unavailable │
-│                                                            │
-│  4. Node Scanner                                           │
-│     - Read nodes                                           │
-│     - Map scheduled pods per node                          │
-│     - Calculate requested and limit percentages            │
-│     - Detect low utilization and memory pressure           │
-│                                                            │
-│  5. Karpenter Scanner                                      │
-│     - Discover NodePools, NodeClaims, EC2NodeClasses       │
-│     - Inspect readiness, drift, expiry, capacity types     │
-│     - Analyze warning events                               │
-└────────────────────────────────────────────────────────────┘
-                              │
-                              │ Structured Scan Data
-                              ▼
-┌────────────────────────────────────────────────────────────┐
-│                 Capacity Analyzer Layer                    │
-│                                                            │
-│ Responsibility:                                            │
-│ - Convert raw Kubernetes objects into capacity signals     │
-│ - Score waste and risk                                     │
-│ - Build explainable findings                               │
-│                                                            │
-│ Components:                                                │
-│                                                            │
-│  1. Workload Resource Analyzer                             │
-│     - Missing CPU request                                  │
-│     - Missing memory request                               │
-│     - Missing CPU limit                                    │
-│     - Missing memory limit                                 │
-│     - Over-requested CPU and memory                        │
-│     - Under-requested memory and possible OOM risk         │
-│     - Idle workloads                                       │
-│                                                            │
-│  2. Node Efficiency Analyzer                               │
-│     - Requested CPU percentage                             │
-│     - Requested memory percentage                          │
-│     - Live CPU and memory percentage when metrics exist    │
-│     - Empty or low-utilization nodes                       │
-│     - High pod density                                     │
-│                                                            │
-│  3. Namespace Risk Analyzer                                │
-│     - Namespace-level waste score                          │
-│     - Concentrated risk detection                          │
-│     - Prioritized namespace triage                         │
-│                                                            │
-│  4. Karpenter NodePool Sizing Analyzer                     │
-│     - Narrow instance constraints                          │
-│     - Missing spot capacity option                         │
-│     - Missing consolidation                                │
-│     - Limits too low or too high                           │
-│     - Pending pods that do not match NodePools             │
-└────────────────────────────────────────────────────────────┘
-                              │
-                              │ Findings + Evidence
-                              ▼
-┌────────────────────────────────────────────────────────────┐
-│                 Recommendation Engine                      │
-│                                                            │
-│ Responsibility:                                            │
-│ - Generate deterministic recommendations                   │
-│ - Suggest safe right-sizing actions                        │
-│ - Generate YAML patch previews only                        │
-│ - Never mutate the cluster                                 │
-│                                                            │
-│ Recommendation Types:                                      │
-│                                                            │
-│  1. Workload Recommendations                               │
-│     - Add missing requests                                 │
-│     - Add missing limits                                   │
-│     - Right-size over-requested workloads                  │
-│     - Raise memory requests for OOM risk                   │
-│                                                            │
-│  2. Node Recommendations                                   │
-│     - Investigate low-utilization nodes                    │
-│     - Rebalance pods                                      │
-│     - Review node sizing                                   │
-│     - Check memory pressure                                │
-│                                                            │
-│  3. Karpenter Recommendations                              │
-│     - Widen instance families                              │
-│     - Allow multiple zones                                 │
-│     - Tune consolidation and disruption                    │
-│     - Adjust NodePool CPU and memory limits                │
-│     - Align selectors, affinities, and tolerations         │
-└────────────────────────────────────────────────────────────┘
-                              │
-                              │ Optional Summarized Findings
-                              ▼
-┌────────────────────────────────────────────────────────────┐
-│                 Optional AI Explanation Layer              │
-│                                                            │
-│ Responsibility:                                            │
-│ - Use AI only when explicitly configured                   │
-│ - Work without any AI provider                             │
-│ - Explain evidence like a senior platform engineer         │
-│ - Return strict JSON                                       │
-│ - Never invent data                                        │
-│                                                            │
-│ Provider:                                                  │
-│                                                            │
-│  AI_PROVIDER=codex_cli                                     │
-│                                                            │
-│  - Uses local Codex CLI device login                       │
-│  - Sends summarized findings only                          │
-│  - Uses timeout                                            │
-│  - Requires strict JSON output                             │
-└────────────────────────────────────────────────────────────┘
-                              │
-                              │ API Response
-                              ▼
-┌────────────────────────────────────────────────────────────┐
-│                    Next.js Dashboard                       │
-│                                                            │
-│ Responsibility:                                            │
-│ - Select kubeconfig context and namespace                  │
-│ - Run fast or deep scans                                   │
-│ - Show scan progress                                       │
-│ - Display workload, node, Karpenter, and AI signals        │
-│ - Copy kubectl commands                                    │
-│ - Copy YAML patch previews                                 │
-│ - Show recent scan history                                 │
-│                                                            │
-│ UI Style:                                                  │
-│                                                            │
-│  Futuristic AI capacity command deck                       │
-│  Dark cockpit UI                                           │
-│  Animated radar panels                                     │
-│  Evidence-first recommendation cards                       │
-└────────────────────────────────────────────────────────────┘
+## Radar Model
+
+The project organizes cluster health into five signal groups:
+
+| Signal Group | Questions Answered |
+| --- | --- |
+| Context | Is the selected kubeconfig context reachable, and what server version is running? |
+| Workloads | Are requests, limits, restarts, OOMs, pending pods, and crashloops under control? |
+| Usage | Do live CPU and memory metrics suggest over-requesting, under-requesting, or idle workloads? |
+| Nodes | Are nodes efficiently packed, low-utilization, memory pressured, or overloaded with pods? |
+| Karpenter | Are NodePools, NodeClaims, requirements, limits, disruption settings, and capacity types healthy? |
+
+Each signal becomes structured findings, recommendations, and optional patch previews.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A["Next.js Command Deck"] --> B["FastAPI Scan API"]
+    B --> C["Kubectl Executor"]
+    C --> D["Kubeconfig Contexts"]
+    C --> E["Workloads + Pods"]
+    C --> F["Metrics Server"]
+    C --> G["Nodes"]
+    C --> H["Karpenter CRDs"]
+
+    E --> I["Workload Analyzer"]
+    F --> I
+    G --> J["Node Efficiency Analyzer"]
+    H --> K["Karpenter Sizing Analyzer"]
+    G --> K
+    E --> K
+
+    I --> L["Recommendation Engine"]
+    J --> L
+    K --> L
+
+    L --> M["Dashboard Findings"]
+    L --> N["Optional Codex CLI Explanation"]
+    N --> M
 ```
 
-# End-to-End Workflow
+### Backend Layers
 
-```text
-User opens dashboard
-        │
-        ▼
-Frontend loads kubeconfig contexts
-        │
-        ▼
-User selects context and namespace
-        │
-        ▼
-User runs Fast Scan or Deep Scan
-        │
-        ▼
-FastAPI Backend
-  read-only orchestration layer
-        │
-        ├── Context reachability check
-        ├── Workload resource scan
-        ├── Optional live metrics scan
-        ├── Node efficiency scan
-        └── Karpenter capacity scan
-        │
-        ▼
-Capacity Analyzer
-        │
-        ├── Workload waste findings
-        ├── Node efficiency findings
-        ├── Namespace waste score
-        └── NodePool sizing findings
-        │
-        ▼
-Recommendation Engine
-        │
-        ├── Right-sizing guidance
-        ├── Karpenter tuning guidance
-        └── YAML patch previews
-        │
-        ▼
-Optional AI Explanation
-        │
-        ├── Executive summary
-        ├── Top risks
-        ├── Savings opportunities
-        ├── Karpenter recommendations
-        └── Assumptions
-        │
-        ▼
-Dashboard renders command deck
-```
+| Layer | Responsibility |
+| --- | --- |
+| API routes | Health, context discovery, workload scan, node scan, Karpenter scan, AI explain. |
+| Kubectl executor | Builds safe commands, applies context/kubeconfig, handles timeouts, sanitizes output. |
+| Scanners | Collect Kubernetes JSON and live metrics using read-only commands. |
+| Analyzers | Convert raw objects into risk and waste signals. |
+| Recommendation engine | Produces practical next actions and YAML previews. |
+| AI explainer | Uses Codex CLI only when configured, with strict JSON output. |
 
-# Example Capacity Flow
+### Frontend Surfaces
 
-```text
-Issue:
-AWS EKS cluster has high cost and frequent pod restarts.
+| Surface | Purpose |
+| --- | --- |
+| Target Matrix | Select kubeconfig context and namespace. |
+| Scan Control | Run fast or deep scans and copy the equivalent `kubectl` command. |
+| Radar | Show overall risk, workload waste, node pressure, and Karpenter signal counts. |
+| Workloads | List missing requests/limits, restarts, OOM risk, and namespace waste. |
+| Nodes | Show node request ratios, live usage, pressure, and density findings. |
+| Karpenter | Inspect NodePools, NodeClaims, limits, flexibility, and sizing recommendations. |
+| AI | Generate evidence-cited summaries from scan output. |
+| YAML | Review patch previews without applying them. |
 
-Radar Scan:
+## Scan Modes
 
-✓ Context reachability checked
-✓ Workloads scanned
-✓ Metrics collected when available
-✓ Nodes analyzed
-✓ Karpenter NodePools inspected
+### Fast Scan
 
-Detected Problems:
+Fast scan focuses on workload posture:
 
-- 244 workload findings
-- Multiple containers missing memory requests
-- Several pods with high restart counts
-- NodePools have narrow instance constraints
-- Some NodePools allow only one capacity type
+1. Verify context reachability.
+2. Read namespaces and workload controllers.
+3. Read pods.
+4. Attempt pod metrics if metrics-server is available.
+5. Produce workload and namespace findings.
 
-Evidence:
+### Deep Scan
 
-- Deployment api has no memory request
-- Pod worker-xyz restarted 18 times
-- NodePool general only allows one instance family
-- Pending pod does not match any NodePool requirements
+Deep scan expands into capacity and Karpenter:
 
-Recommendations:
+1. Run fast scan.
+2. Read nodes and scheduled pods.
+3. Attempt node metrics.
+4. Discover Karpenter resources.
+5. Analyze NodePools and NodeClaims.
+6. Generate capacity recommendations and patch previews.
 
-- Add memory requests based on observed usage
-- Right-size over-requested workloads before changing NodePools
-- Widen instance family constraints
-- Allow multiple zones
-- Enable or tune consolidation
-- Generate patch previews for safe review
+## Findings
 
-Confidence:
-Evidence-backed deterministic scan with optional AI explanation.
-```
-
-## Supported Kubernetes Capacity Problems
-
-- Missing CPU requests
-- Missing memory requests
-- Missing CPU limits
-- Missing memory limits
-- Over-requested CPU
-- Over-requested memory
-- Under-requested memory
-- Possible OOM risk
-- OOMKilled pods
-- High restart counts
-- CrashLoopBackOff pods
-- Pending pods
-- Idle workloads
-- Namespace-level waste risk
-- Empty or low-utilization nodes
-- Nodes near memory pressure
-- High pod density
-- Karpenter not installed
-- NodePool readiness issues
-- NodeClaim not ready
-- Drifted NodeClaims
-- Expired or old NodeClaims
-- Narrow instance type constraints
-- Single capacity type NodePools
-- Missing spot option where appropriate
-- Missing consolidation
-- Overly aggressive disruption
-- NodePool limits too low for pending workloads
-- NodePool limits far above actual usage
-- Pending pods that do not match any NodePool
-
-## Tech Stack
-
-### Backend
-
-- FastAPI
-- Python 3.12+
-- Uvicorn
-- Pydantic
-- Loguru
-- HTTPX
-- kubectl via subprocess
-
-### Frontend
-
-- Next.js
-- TypeScript
-- Tailwind CSS
-- Axios
-- React Query
-
-### Infrastructure
-
-- Docker
-- Docker Compose
-
-### Optional AI
-
-- Codex CLI through `AI_PROVIDER=codex_cli`
-
-## Repository Structure
-
-```text
-AI-k8s-Capacity-Radar/
-├── README.md
-├── LICENSE
-├── .gitignore
-├── screenshots/
-│   ├── capacity-command-deck.png
-│   └── ai-recommendations-synthesizing.png
-├── docs/
-│   ├── architecture.md
-│   ├── scan-flow.md
-│   └── karpenter-analysis.md
-├── prompts/
-│   ├── 01-project-setup-prompt.md
-│   ├── 02-kubectl-scanner-prompt.md
-│   ├── 03-capacity-analysis-engine-prompt.md
-│   ├── 04-karpenter-ai-recommendation-prompt.md
-│   ├── 05-end-to-end-dashboard-prompt.md
-│   ├── ai-explanation-system-prompt.md
-│   ├── scan-summary-prompt.md
-│   └── yaml-patch-guidelines.md
-└── manifests/
-    └── demo/
-        ├── missing-requests-limits.yaml
-        ├── pending-impossible-node-selector.yaml
-        └── karpenter-nodepool-examples.yaml
-```
-
-## Safety Principles
-
-- Use `kubectl` only
-- Read-only by default
-- Do not apply fixes automatically
-- Do not expose secrets
-- Do not send raw cluster objects to AI
-- AI must cite scan evidence
-- AI must not invent data
-- YAML output is a patch preview only
-
-## Environment
-
-```env
-KUBECONFIG_PATH=
-KUBECTL_TIMEOUT_SECONDS=60
-AI_PROVIDER=
-AI_TIMEOUT_SECONDS=180
-AI_MAX_FINDINGS=20
-CODEX_CLI_PATH=codex
-```
-
-To enable optional AI explanations:
-
-```env
-AI_PROVIDER=codex_cli
-CODEX_CLI_PATH=/Applications/Codex.app/Contents/Resources/codex
-```
-
-## API Surface
-
-```text
-GET  /health
-GET  /contexts
-GET  /contexts/{context_name}/namespaces
-POST /scan/context
-POST /scan/workloads
-POST /scan/nodes
-POST /scan/karpenter
-POST /ai/explain
-```
-
-## Scan Output Shape
+Every finding is intended to be actionable and evidence-backed.
 
 ```json
 {
-  "summary": {},
-  "namespaces": [],
-  "workloads": [],
-  "findings": []
-}
-```
-
-Each finding includes:
-
-```json
-{
-  "severity": "low | medium | high | critical",
-  "namespace": "default",
+  "severity": "high",
+  "namespace": "production",
   "workload_name": "api",
   "workload_kind": "Deployment",
   "container_name": "api",
   "finding_type": "missing_memory_request",
-  "evidence": "container has no memory request",
-  "recommendation": "set memory request from observed usage"
+  "evidence": "container api has no memory request",
+  "recommendation": "Set a memory request based on observed usage or a conservative baseline."
 }
 ```
 
-## AI Output Schema
+Supported workload findings include:
+
+- Missing CPU request
+- Missing memory request
+- Missing CPU limit
+- Missing memory limit
+- OOMKilled container
+- High restart count
+- Pending pod
+- CrashLoopBackOff pod
+- Over-requested CPU
+- Over-requested memory
+- Under-requested memory
+- Possible OOM risk
+- Idle workload
+
+Supported node findings include:
+
+- Empty node
+- Low-utilization node
+- Node near memory pressure
+- High pod density
+
+Supported Karpenter findings include:
+
+- NodePool not ready
+- Missing or risky NodePool limits
+- Narrow instance requirements
+- Single capacity type
+- Missing spot option where appropriate
+- Missing consolidation
+- Aggressive disruption settings
+- NodeClaim not ready
+- Drifted NodeClaim
+- Expired or old NodeClaim
+- Pending pod that does not match any NodePool
+
+## Karpenter Capacity Review
+
+The Karpenter analyzer is focused on capacity design, not generic troubleshooting.
+
+It reviews:
+
+- NodePool readiness conditions
+- CPU and memory limits
+- disruption and consolidation settings
+- instance families and categories
+- capacity types such as spot and on-demand
+- zone and architecture flexibility
+- NodeClaim readiness, drift, age, expiry, and instance type
+- pending pods that fail NodePool matching
+
+Recommendations can include:
+
+- Widen instance family constraints.
+- Allow multiple zones.
+- Add spot capacity where workload risk permits.
+- Tune consolidation and disruption settings.
+- Adjust NodePool CPU and memory limits.
+- Split specialized workloads into separate NodePools.
+- Align pod selectors, affinities, and tolerations.
+- Right-size workload requests before changing NodePool size.
+
+## Optional AI Explanation
+
+AI is deliberately placed after deterministic analysis.
+
+When disabled:
+
+```json
+{
+  "enabled": false,
+  "error": "AI is disabled. Set AI_PROVIDER=codex_cli to enable explanations."
+}
+```
+
+When enabled, the backend sends only summarized scan findings to Codex CLI and expects this strict JSON response:
 
 ```json
 {
@@ -472,3 +239,89 @@ Each finding includes:
 }
 ```
 
+The AI layer must:
+
+- cite evidence from the scan payload
+- avoid inventing facts
+- preserve uncertainty in assumptions
+- generate patch previews only
+- never apply changes
+
+## API Surface
+
+```text
+GET  /health
+GET  /contexts
+GET  /contexts/{context_name}/namespaces
+POST /scan/context
+POST /scan/workloads
+POST /scan/nodes
+POST /scan/karpenter
+POST /ai/explain
+```
+
+## Environment
+
+```env
+KUBECONFIG_PATH=
+KUBECTL_TIMEOUT_SECONDS=60
+AI_PROVIDER=
+AI_TIMEOUT_SECONDS=180
+AI_MAX_FINDINGS=20
+CODEX_CLI_PATH=codex
+```
+
+Enable optional Codex CLI explanations:
+
+```env
+AI_PROVIDER=codex_cli
+CODEX_CLI_PATH=/Applications/Codex.app/Contents/Resources/codex
+```
+
+## Repository Layout
+
+```text
+AI-K8s-Capacity-Radar/
+├── README.md
+├── LICENSE
+├── .env.example
+├── screenshots/
+│   ├── capacity-command-deck.png
+│   └── ai-recommendations-synthesizing.png
+├── docs/
+│   ├── architecture.md
+│   ├── scan-flow.md
+│   └── karpenter-analysis.md
+└── prompts/
+    ├── 01-project-setup-prompt.md
+    ├── 02-kubectl-scanner-prompt.md
+    ├── 03-capacity-analysis-engine-prompt.md
+    ├── 04-karpenter-ai-recommendation-prompt.md
+    ├── 05-end-to-end-dashboard-prompt.md
+    ├── ai-explanation-system-prompt.md
+    ├── scan-summary-prompt.md
+    └── yaml-patch-guidelines.md
+```
+
+## Safety Boundaries
+
+This project should not:
+
+- run `kubectl apply`
+- delete or patch live cluster resources
+- send raw secrets to AI
+- require AI for core scan results
+- hide missing metrics or partial scan warnings
+
+This project should:
+
+- make every recommendation traceable to evidence
+- continue when metrics-server is unavailable
+- return friendly errors for kubeconfig, RBAC, timeout, and reachability issues
+- keep YAML changes as human-reviewed previews
+
+## Why This Exists
+
+Kubernetes capacity work is usually split across several surfaces: workload specs, live metrics, node utilization, scheduling failures, and autoscaler configuration. This radar puts those signals in one place and keeps the remediation path safe.
+
+The goal is not to replace platform engineers. The goal is to give them a faster, evidence-backed starting point for capacity reviews.
